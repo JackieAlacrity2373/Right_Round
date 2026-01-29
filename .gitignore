@@ -1,0 +1,56 @@
+# Build directories and artifacts
+DM2Delay/build/
+build/
+cmake_build/
+out/
+.build/
+
+# Compiled binaries and libraries
+*.exe
+*.exe~
+*.vst3
+*.dll
+*.so
+*.dylib
+*.a
+*.lib
+*.o
+*.obj
+*.slo
+*.lo
+*.ko
+*.gch
+
+# Debug files
+*.pdb
+*.ilk
+*.elf
+*.map
+
+# JUCE framework (too large to track)
+JUCE/
+Thirdparty/JUCE/
+
+# IDE and editor files
+.vscode/
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
