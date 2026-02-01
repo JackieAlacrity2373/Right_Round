@@ -66,7 +66,7 @@ void DM2DelayAudioProcessor::changeProgramName(int index, const juce::String& ne
 
 void DM2DelayAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
-    // Initialize all DSP modules for both channels
+    // Initialize Stage 1 DSP modules for both channels
     delayLineLeft.prepare(sampleRate, samplesPerBlock);
     delayLineRight.prepare(sampleRate, samplesPerBlock);
     
@@ -81,11 +81,27 @@ void DM2DelayAudioProcessor::prepareToPlay(double sampleRate, int samplesPerBloc
     
     mixStageLeft.prepare(sampleRate);
     mixStageRight.prepare(sampleRate);
+
+    // Initialize Stage 2 DSP modules for cascaded mode
+    delayLine2Left.prepare(sampleRate, samplesPerBlock);
+    delayLine2Right.prepare(sampleRate, samplesPerBlock);
+    
+    compander2Left.prepare(sampleRate);
+    compander2Right.prepare(sampleRate);
+    
+    bbdModel2Left.prepare(sampleRate);
+    bbdModel2Right.prepare(sampleRate);
+    
+    filter2Left.prepare(sampleRate);
+    filter2Right.prepare(sampleRate);
+    
+    mixStage2Left.prepare(sampleRate);
+    mixStage2Right.prepare(sampleRate);
 }
 
 void DM2DelayAudioProcessor::releaseResources()
 {
-    // Reset all DSP modules
+    // Reset Stage 1 DSP modules
     delayLineLeft.reset();
     delayLineRight.reset();
     companderLeft.reset();
@@ -96,6 +112,18 @@ void DM2DelayAudioProcessor::releaseResources()
     filterRight.reset();
     mixStageLeft.reset();
     mixStageRight.reset();
+
+    // Reset Stage 2 DSP modules
+    delayLine2Left.reset();
+    delayLine2Right.reset();
+    compander2Left.reset();
+    compander2Right.reset();
+    bbdModel2Left.reset();
+    bbdModel2Right.reset();
+    filter2Left.reset();
+    filter2Right.reset();
+    mixStage2Left.reset();
+    mixStage2Right.reset();
 }
 
 bool DM2DelayAudioProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
@@ -123,12 +151,26 @@ void DM2DelayAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear(i, 0, buffer.getNumSamples());
 
-    // Get parameter values
+    // Check bypass state - apply safety limiting even when bypassed
+    if (isBypassed.load())
+    {
+        // Apply soft clipping to prevent digital clipping even in bypass
+        for (int channel = 0; channel < totalNumInputChannels; ++channel)
+        {
+            auto* channelData = buffer.getWritePointer(channel);
+            for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
+            {
+                channelData[sample] = std::tanh(channelData[sample]);
+            }
+        }
+        return;
+    }
+
+    // Get parameter values for Stage 1
     float delayTime = apvts.getRawParameterValue(Parameters::delayTimeID)->load();
     float feedback = apvts.getRawParameterValue(Parameters::feedbackID)->load();
     float mix = apvts.getRawParameterValue(Parameters::mixID)->load();
     float tone = apvts.getRawParameterValue(Parameters::toneID)->load();
-    // float modulation = apvts.getRawParameterValue(Parameters::modulationID)->load(); // Phase 3
 
     // Check if in custom mode (cascaded delay)
     bool isCustomMode = apvts.getRawParameterValue(Parameters::modeID)->load() > 0.5f;
@@ -152,58 +194,76 @@ void DM2DelayAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     {
         auto* channelData = buffer.getWritePointer(channel);
         
-        // Select DSP modules for this channel
+        // Select DSP modules for Stage 1
         DelayLine& delayLine = (channel == 0) ? delayLineLeft : delayLineRight;
         Compander& compander = (channel == 0) ? companderLeft : companderRight;
         BBDModel& bbdModel = (channel == 0) ? bbdModelLeft : bbdModelRight;
         Filter& filter = (channel == 0) ? filterLeft : filterRight;
         MixStage& mixStage = (channel == 0) ? mixStageLeft : mixStageRight;
 
-        // Process sample-by-sample (DSP chain as per design doc)
+        // Select DSP modules for Stage 2 (if needed)
+        DelayLine& delayLine2 = (channel == 0) ? delayLine2Left : delayLine2Right;
+        Compander& compander2 = (channel == 0) ? compander2Left : compander2Right;
+        BBDModel& bbdModel2 = (channel == 0) ? bbdModel2Left : bbdModel2Right;
+        Filter& filter2 = (channel == 0) ? filter2Left : filter2Right;
+        MixStage& mixStage2 = (channel == 0) ? mixStage2Left : mixStage2Right;
+
+        // Process sample-by-sample
         for (int sample = 0; sample < buffer.getNumSamples(); ++sample)
         {
             float inputSample = channelData[sample];
             float drySample = inputSample; // Save for mixing
             
-            // DSP Chain: Input → Compressor → Delay → BBD → Expander → Filter → Mix
-            
-            // 1. Input Stage (implicit - handled by DAW/plugin host)
-            
-            // 2. Compressor (pre-BBD)
+            // STAGE 1 DSP Chain
+            // 1. Compressor (pre-BBD)
             float compressed = compander.compress(inputSample);
             
-            // 3. BBD Delay
+            // 2. BBD Delay
             float delayed = delayLine.processSample(compressed, delayTime, feedback);
             
-            // 4. BBD artifacts
+            // 3. BBD artifacts
             float bbdProcessed = bbdModel.processSample(delayed, delayTime);
             
-            // 4.5. CUSTOM MODE: Cascade second delay stage (King of Tone style)
-            if (isCustomMode)
-            {
-                // Run through delay chain again with stage 2 settings
-                float compressed2 = compander.compress(bbdProcessed);
-                float delayed2 = delayLine.processSample(compressed2, delayTime2, feedback2);
-                bbdProcessed = bbdModel.processSample(delayed2, delayTime2);
-                
-                // Apply stage 2 filtering
-                float expanded2 = compander.expand(bbdProcessed);
-                float filtered2 = filter.processSample(expanded2, tone2);
-                
-                // Mix stage 2 with dry signal from stage 1 output
-                bbdProcessed = mixStage.processSample(bbdProcessed, filtered2, mix2);
-            }
-            
-            // 5. Expander (post-BBD)
+            // 4. Expander (post-BBD)
             float expanded = compander.expand(bbdProcessed);
             
-            // 6. Filter stage
+            // 5. Filter stage
             float filtered = filter.processSample(expanded, tone);
             
-            // 7. Mix stage
-            float output = mixStage.processSample(drySample, filtered, mix);
+            // 6. Mix stage 1 output
+            float stage1Output = mixStage.processSample(drySample, filtered, mix);
             
-            channelData[sample] = output;
+            // STAGE 2: Cascaded processing (if in custom mode)
+            float finalOutput = stage1Output;
+            
+            if (isCustomMode)
+            {
+                // Stage 2 processes the output of Stage 1 (true cascade)
+                float stage2Input = stage1Output;
+                
+                // 1. Stage 2 Compressor
+                float compressed2 = compander2.compress(stage2Input);
+                
+                // 2. Stage 2 BBD Delay  
+                float delayed2 = delayLine2.processSample(compressed2, delayTime2, feedback2);
+                
+                // 3. Stage 2 BBD artifacts
+                float bbdProcessed2 = bbdModel2.processSample(delayed2, delayTime2);
+                
+                // 4. Stage 2 Expander
+                float expanded2 = compander2.expand(bbdProcessed2);
+                
+                // 5. Stage 2 Filter
+                float filtered2 = filter2.processSample(expanded2, tone2);
+                
+                // 6. Mix stage 2: blend stage1 dry with stage 2 wet (not original input!)
+                finalOutput = mixStage2.processSample(stage2Input, filtered2, mix2);
+            }
+            
+            // Soft clip to prevent digital clipping
+            finalOutput = std::tanh(finalOutput);
+            
+            channelData[sample] = finalOutput;
         }
     }
 }

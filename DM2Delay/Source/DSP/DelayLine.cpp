@@ -32,6 +32,9 @@ float DelayLine::getDelayInSamples(float delayTimeMs) const
 
 float DelayLine::processSample(float inputSample, float delayTimeMs, float feedback)
 {
+    if (buffer.empty())
+        return inputSample;
+    
     // Clamp feedback to safe range (0-95% from design doc)
     feedback = juce::jlimit(0.0f, 0.95f, feedback / 100.0f);
     
@@ -42,8 +45,13 @@ float DelayLine::processSample(float inputSample, float delayTimeMs, float feedb
     // Read delayed sample with interpolation
     float delayedSample = readInterpolated(delaySamples);
     
-    // Write input + feedback to buffer
-    float bufferInput = inputSample + (delayedSample * feedback);
+    // Soft clip feedback to prevent runaway
+    float feedbackSample = std::tanh(delayedSample * feedback);
+    
+    // Write input + feedback to buffer with soft clipping
+    float bufferInput = std::tanh(inputSample + feedbackSample);
+    
+    jassert(writeIndex >= 0 && writeIndex < static_cast<int>(buffer.size()));
     buffer[writeIndex] = bufferInput;
     
     // Advance write index (circular buffer)
@@ -54,22 +62,36 @@ float DelayLine::processSample(float inputSample, float delayTimeMs, float feedb
 
 float DelayLine::readInterpolated(float delaySamples)
 {
+    if (buffer.empty())
+        return 0.0f;
+    
+    int bufferSize = static_cast<int>(buffer.size());
+    
     // Calculate read position
     float readPos = static_cast<float>(writeIndex) - delaySamples;
     
     // Wrap negative positions
     while (readPos < 0.0f)
-        readPos += static_cast<float>(buffer.size());
+        readPos += static_cast<float>(bufferSize);
+    
+    // Ensure readPos is within valid range
+    while (readPos >= static_cast<float>(bufferSize))
+        readPos -= static_cast<float>(bufferSize);
     
     // Get integer and fractional parts
-    int index0 = static_cast<int>(std::floor(readPos));
-    float frac = readPos - static_cast<float>(index0);
+    int index0 = static_cast<int>(std::floor(readPos)) % bufferSize;
+    float frac = readPos - std::floor(readPos);
     
-    // Get 4 samples for cubic interpolation
-    int bufferSize = static_cast<int>(buffer.size());
+    // Get 4 samples for cubic interpolation with safe wrapping
     int index1 = (index0 + 1) % bufferSize;
     int index2 = (index0 + 2) % bufferSize;
     int indexMinus1 = (index0 - 1 + bufferSize) % bufferSize;
+    
+    // Bounds checking for safety
+    jassert(indexMinus1 >= 0 && indexMinus1 < bufferSize);
+    jassert(index0 >= 0 && index0 < bufferSize);
+    jassert(index1 >= 0 && index1 < bufferSize);
+    jassert(index2 >= 0 && index2 < bufferSize);
     
     float y0 = buffer[indexMinus1];
     float y1 = buffer[index0];

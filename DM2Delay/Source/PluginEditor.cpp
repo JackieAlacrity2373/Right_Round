@@ -143,6 +143,7 @@ DM2DelayAudioProcessorEditor::DM2DelayAudioProcessorEditor(DM2DelayAudioProcesso
     bypassButton.onClick = [this]()
     {
         isBypassed = !isBypassed;
+        audioProcessor.setBypass(isBypassed);
         repaint();
     };
     addAndMakeVisible(bypassButton);
@@ -171,6 +172,9 @@ DM2DelayAudioProcessorEditor::DM2DelayAudioProcessorEditor(DM2DelayAudioProcesso
     // Initialize mode from parameter
     isCustomMode = audioProcessor.getAPVTS().getRawParameterValue(Parameters::modeID)->load() > 0.5f;
     updateSizeForMode();
+    
+    // Initialize bypass state from processor
+    isBypassed = audioProcessor.getBypass();
 }
 
 DM2DelayAudioProcessorEditor::~DM2DelayAudioProcessorEditor()

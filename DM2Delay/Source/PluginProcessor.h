@@ -46,16 +46,30 @@ public:
 
     // Access to parameter tree
     juce::AudioProcessorValueTreeState& getAPVTS() { return apvts; }
+    
+    // Bypass control
+    void setBypass(bool shouldBypass) { isBypassed.store(shouldBypass); }
+    bool getBypass() const { return isBypassed.load(); }
 
 private:
     juce::AudioProcessorValueTreeState apvts;
 
-    // DSP modules - stereo processing (left/right channels)
+    // DSP modules - Stage 1: stereo processing (left/right channels)
     DelayLine delayLineLeft, delayLineRight;
     Compander companderLeft, companderRight;
     BBDModel bbdModelLeft, bbdModelRight;
     Filter filterLeft, filterRight;
     MixStage mixStageLeft, mixStageRight;
+
+    // DSP modules - Stage 2: for cascaded mode (separate instances to avoid state corruption)
+    DelayLine delayLine2Left, delayLine2Right;
+    Compander compander2Left, compander2Right;
+    BBDModel bbdModel2Left, bbdModel2Right;
+    Filter filter2Left, filter2Right;
+    MixStage mixStage2Left, mixStage2Right;
+
+    // Bypass state
+    std::atomic<bool> isBypassed{false};
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DM2DelayAudioProcessor)
 };
